@@ -1,0 +1,88 @@
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+
+#include "code_generator.h"
+
+int currentRegisterIndex = 0;
+
+void writeFunctionStart(tree_t *bnode) 
+{   
+    currentRegisterIndex += getRegisterIndex(bnode->regStor);
+    writeSaveRegisters(bnode->kids[0]->parameterIndex, currentRegisterIndex); 
+}
+
+void writeFunctionEnd(tree_t *bnode)
+{
+    writeCallMethod(bnode->kids[0]->identifierName); 
+    writeRestoreRegisters(bnode->kids[0]->parameterIndex, getRegisterIndex(bnode->regStor)); 
+    writeMove("rax", bnode->regStor);
+
+    currentRegisterIndex -= getRegisterIndex(bnode->regStor); 
+}
+
+%}
+
+%start stat
+%term OP_RETURN=0 OP_ADD=1 OP_MUL=2 OP_OR=3 OP_GREATER=4 OP_NOT_EQUAL=5 OP_NOT=6 OP_NEG=7 OP_NUMBER=8 OP_ID=9 OP_PARAM_ID=10 OP_CLASS_VAR_ID=11 OP_NULL=12 OP_ASSIGN=13 OP_NEW_OBJ=14 OP_COND=15 OP_IF_ID=16 OP_METHOD_EXPR=17 OP_ONE_METHOD_EXPR=18 OP_EMPTY_METHOD=19 OP_METHOD=20
+
+%%
+stat:   ret                                         # 0 #   
+stat:   assign                                      # 0 #   
+stat:   cond                                        # 0 #
+stat:   methodcall                                  # 0 #
+stat:   expr                                        # 0 #
+ret:    OP_RETURN(expr)                             # 1 #   writeReturnWithValue(bnode->regStor);
+expr:   const                                       # 1 #   writeMovev(bnode->value, bnode->regStor);
+expr:   OP_ADD(expr, expr)                          # 1 #   writeAdd(bnode->kids[1]->regStor, bnode->kids[0]->regStor);
+expr:   OP_ADD(const, expr)                         # 1 #   writeAddv(bnode->kids[0]->value, bnode->kids[1]->regStor); writeMove(bnode->kids[1]->regStor, bnode->regStor); 
+expr:   OP_ADD(expr, const)                         # 1 #   writeAddv(bnode->kids[1]->value, bnode->kids[0]->regStor);
+const:  OP_ADD(const, const)                        # 0 #   bnode->value = bnode->kids[0]->value + bnode->kids[1]->value;
+expr:   OP_MUL(expr, expr)                          # 1 #   writeMul(bnode->kids[1]->regStor, bnode->kids[0]->regStor);
+expr:   OP_MUL(const, expr)                         # 1 #   writeMulv(bnode->kids[0]->value, bnode->kids[1]->regStor); writeMove(bnode->kids[1]->regStor, bnode->regStor);
+expr:   OP_MUL(expr, const)                         # 1 #   writeMulv(bnode->kids[1]->value, bnode->kids[0]->regStor);
+const:  OP_MUL(const, const)                        # 0 #   bnode->value = bnode->kids[0]->value * bnode->kids[1]->value;
+expr:   OP_OR(expr, expr)                           # 1 #   writeOr(bnode->kids[1]->regStor, bnode->kids[0]->regStor);
+expr:   OP_OR(const, expr)                          # 1 #   writeOrv(bnode->kids[0]->value, bnode->kids[1]->regStor); writeMove(bnode->kids[1]->regStor, bnode->regStor); 
+expr:   OP_OR(expr, const)                          # 1 #   writeOrv(bnode->kids[1]->value, bnode->kids[0]->regStor);
+const:  OP_OR(const, const)                         # 0 #   bnode->value = bnode->kids[0]->value | bnode->kids[1]->value;
+expr:   OP_GREATER(expr, expr)                      # 1 #   writeRegGreaterReg(bnode->kids[0]->regStor, bnode->kids[1]->regStor, bnode->regStor);
+expr:   OP_GREATER(expr, const)                     # 1 #   writeRegGreaterV(bnode->kids[0]->regStor, bnode->kids[1]->value, bnode->regStor);
+expr:   OP_GREATER(const, expr)                     # 1 #   writeVGreaterReg(bnode->kids[0]->value, bnode->kids[1]->regStor, bnode->regStor);
+const:  OP_GREATER(const, const)                    # 0 #   if(bnode->kids[0]->value > bnode->kids[1]->value) { bnode->value = TRUE_VAL; } else { bnode->value = FALSE_VAL; } 
+expr:   OP_NOT_EQUAL(expr, expr)                    # 1 #   writeNotEquals(bnode->kids[0]->regStor,bnode->kids[1]->regStor,bnode->regStor);
+expr:   OP_NOT_EQUAL(const, expr)                   # 1 #   writeNotEqualsv(bnode->kids[0]->value,bnode->kids[1]->regStor,bnode->regStor);
+expr:   OP_NOT_EQUAL(expr, const)                   # 1 #   writeNotEqualsv(bnode->kids[1]->value,bnode->kids[0]->regStor,bnode->regStor);
+const:  OP_NOT_EQUAL(const, const)                  # 0 #   if(bnode->kids[0]->value != bnode->kids[1]->value) { bnode->value = TRUE_VAL; } else { bnode->value = FALSE_VAL; }
+expr:   OP_NOT(expr)                                # 1 #   writeNot(bnode->regStor); 
+const:  OP_NOT(const)                               # 0 #   bnode->value = ~bnode->kids[0]->value;
+expr:   OP_NEG(expr)                                # 1 #   writeNeg(bnode->regStor); 
+const:  OP_NEG(const)                               # 0 #   bnode->value = -bnode->kids[0]->value;
+expr:   OP_ID                                       # 1 #   if (bnode->localVaroffset != -1) writeMoveStack(bnode->localVaroffset, bnode->regStor);
+expr:   OP_PARAM_ID                                 # 1 #   if (bnode->parameterIndex != -1) writeMove(getParameterRegister(bnode->parameterIndex), bnode->regStor);   
+expr:   OP_CLASS_VAR_ID                             # 1 #   if (bnode->classVaroffset != -1) writeMoveForClassVar(bnode->classVaroffset, bnode->regStor);
+expr:   OP_NEW_OBJ                                  # 0 #   generateNewObjekt(bnode->identifierName, bnode->numberOfClassVar, bnode->regStor);
+expr:   OP_METHOD                                   # 1 #   writeFunctionStart(bnode); burm_label(bnode->kids[1]); burm_reduce(bnode->kids[1], 1); writeFunctionEnd(bnode);
+expr:   OP_METHOD_EXPR(expr)                        # 1 #   writeMove(bnode->kids[0]->regStor, bnode->regStor); burm_label(bnode->kids[1]); burm_reduce(bnode->kids[1], 1); 
+expr:   OP_ONE_METHOD_EXPR(expr)                    # 1 #   writeMove(bnode->kids[0]->regStor, bnode->regStor);
+expr:   OP_EMPTY_METHOD                             # 0 #
+const:  OP_NULL                                     # 0 #   bnode->value = 0; /*TODO check if this is what they want */
+const:  OP_NUMBER                                   # 0 #   /* nothing */
+assign: OP_ASSIGN(OP_ID, const)                     # 1 #   writeMoveVInStack(bnode->kids[1]->value, bnode->kids[0]->localVaroffset);
+assign: OP_ASSIGN(OP_ID, expr)                      # 1 #   writeMoveRegInStack(bnode->kids[1]->regStor, bnode->kids[0]->localVaroffset);
+assign: OP_ASSIGN(OP_ID, OP_PARAM_ID)               # 1 #   writeMoveRegInStack(getParameterRegister(bnode->kids[1]->parameterIndex), bnode->kids[0]->localVaroffset);
+assign: OP_ASSIGN(OP_PARAM_ID, const)               # 1 #   writeMovev(bnode->kids[1]->value, getParameterRegister(bnode->kids[0]->parameterIndex));
+assign: OP_ASSIGN(OP_PARAM_ID, expr)                # 1 #   writeMove(bnode->kids[1]->regStor, getParameterRegister(bnode->kids[0]->parameterIndex));
+assign: OP_ASSIGN(OP_PARAM_ID, OP_ID)               # 1 #   writeMoveStack(bnode->kids[1]->localVaroffset, getParameterRegister(bnode->kids[0]->parameterIndex));
+assign: OP_ASSIGN(OP_PARAM_ID, OP_PARAM_ID)         # 1 #   writeMove(getParameterRegister(bnode->kids[1]->parameterIndex), getParameterRegister(bnode->kids[0]->parameterIndex));
+assign: OP_ASSIGN(OP_PARAM_ID, OP_CLASS_VAR_ID)     # 1 #   writeMoveForClassVar(bnode->kids[1]->classVaroffset, getParameterRegister(bnode->kids[0]->parameterIndex));
+assign: OP_ASSIGN(OP_CLASS_VAR_ID, const)           # 1 #   writeMoveVIntoClassVar(bnode->kids[1]->value, bnode->kids[0]->classVaroffset);
+assign: OP_ASSIGN(OP_CLASS_VAR_ID, expr)            # 1 #   writeMoveRegIntoClassVar(bnode->kids[1]->regStor, bnode->kids[0]->classVaroffset);
+assign: OP_ASSIGN(OP_CLASS_VAR_ID, OP_PARAM_ID)     # 1 #   writeMoveRegIntoClassVar(getParameterRegister(bnode->kids[1]->parameterIndex), bnode->kids[0]->classVaroffset);
+cond: OP_COND(OP_IF_ID, expr)                       # 1 #   writeJumpIf(bnode->regStor, bnode->kids[0]->identifierName);
+methodcall: OP_METHOD                               # 1 #   writeFunctionStart(bnode); burm_label(bnode->kids[1]); burm_reduce(bnode->kids[1], 1); writeFunctionEnd(bnode);
+methodcall: OP_METHOD_EXPR(expr)                    # 1 #   writeMove(bnode->kids[0]->regStor, bnode->regStor); burm_label(bnode->kids[1]); burm_reduce(bnode->kids[1], 1); 
+methodcall: OP_ONE_METHOD_EXPR(expr)                # 1 #   writeMove(bnode->kids[0]->regStor, bnode->regStor);
+methodcall: OP_EMPTY_METHOD                         # 0 #
+%%
